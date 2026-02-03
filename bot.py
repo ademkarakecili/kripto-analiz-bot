@@ -3,6 +3,24 @@ import pandas as pd
 from datetime import datetime
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters, CommandHandler
+import os
+from flask import Flask
+from threading import Thread
+
+app_web = Flask('')
+
+@app_web.route('/')
+def home():
+    return "Bot is alive!"
+
+def run():
+    # Render'ın dinamik portunu alır, yoksa 8080 kullanır
+    port = int(os.environ.get("PORT", 8080))
+    app_web.run(host='0.0.0.0', port=port)
+
+def keep_alive():
+    t = Thread(target=run)
+    t.start()
 
 TOKEN = "8387569713:AAHfe4v0TdmDm2vbQCz0TvGvyIWgyl7OjPw"
 
@@ -203,3 +221,4 @@ app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, coin_handler))
 
 print("🤖 Kriptocu Analiz Bot çalışıyor...")
 app.run_polling()
+
