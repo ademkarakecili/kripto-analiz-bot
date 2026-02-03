@@ -22,7 +22,7 @@ def keep_alive():
     t = Thread(target=run)
     t.start()
 
-TOKEN = "8387569713:AAHfe4v0TdmDm2vbQCz0TvGvyIWgyl7OjPw"
+TOKEN = "8387569713:AAF02_URGPDalPW7KWZVhT0EVqFXArs95-A"
 
 # ===================== BINANCE =====================
 
@@ -232,5 +232,6 @@ if __name__ == '__main__':
         app.run_polling()
     except Exception as e:
         print(f"❌ Başlatma hatası: {e}")
+
 
 
