@@ -220,5 +220,17 @@ app.add_handler(CommandHandler("start", start_handler))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, coin_handler))
 
 print("🤖 Kriptocu Analiz Bot çalışıyor...")
-app.run_polling()
+# ===================== BAŞLATMA =====================
+
+if __name__ == '__main__':
+    try:
+        # Render'ın botu uyutmaması için web sunucusunu başlat
+        keep_alive() 
+        
+        # Botu çalıştır
+        print("🤖 Kriptocu Analiz Bot çalışıyor...")
+        app.run_polling()
+    except Exception as e:
+        print(f"❌ Başlatma hatası: {e}")
+
 
