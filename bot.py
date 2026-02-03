@@ -1,215 +1,93 @@
+import os
+import asyncio
 import requests
 import pandas as pd
 from datetime import datetime
+from flask import Flask
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters, CommandHandler
-from flask import Flask
-
 import threading
-import os
 
-TOKEN = os.getenv("TELEGRAM_TOKEN", "8387569713:AAHfe4v0TdmDm2vbQCz0TvGvyIWgyl7OjPw")
-CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "1869105089")  # Cron job tetiklemesi için kendi Telegram ID'n
+# Ayarlar
+TOKEN = "8387569713:AAHfe4v0TdmDm2vbQCz0TvGvyIWgyl7OjPw"
 
-# ===================== BINANCE =====================
-
+# ===================== BINANCE VERI CEKME =====================
 def get_24h(symbol):
     try:
         url = "https://api.binance.com/api/v3/ticker/24hr"
-        r = requests.get(url, params={"symbol": symbol}, timeout=10).json()
+        r = requests.get(url, params={"symbol": symbol}, timeout=10)
+        if r.status_code != 200: return None
+        data = r.json()
         return {
-            "price": float(r["lastPrice"]),
-            "change": float(r["priceChangePercent"]),
-            "volume": float(r["quoteVolume"])
+            "price": float(data["lastPrice"]),
+            "change": float(data["priceChangePercent"]),
+            "volume": float(data["quoteVolume"])
         }
-    except Exception:
-        return None
+    except: return None
 
-def get_klines(symbol, interval="15m", limit=200):
+def get_klines(symbol):
     try:
         url = "https://api.binance.com/api/v3/klines"
-        r = requests.get(url, params={
-            "symbol": symbol,
-            "interval": interval,
-            "limit": limit
-        }, timeout=10).json()
-
-        df = pd.DataFrame(r, columns=[
-            "open_time","open","high","low","close","volume",
-            "close_time","qav","trades","tb","tq","ignore"
-        ])
+        r = requests.get(url, params={"symbol": symbol, "interval": "15m", "limit": 100}, timeout=10)
+        if r.status_code != 200: return None
+        df = pd.DataFrame(r.json(), columns=["ot","open","high","low","close","vol","ct","qav","tr","tb","tq","ig"])
         df["close"] = df["close"].astype(float)
         return df
-    except Exception:
-        return None
+    except: return None
 
-# ===================== INDICATORS =====================
-
-def indicators(df):
-    df["ema50"] = df["close"].ewm(span=50).mean()
-    df["ema200"] = df["close"].ewm(span=200).mean()
-
-    delta = df["close"].diff()
-    gain = delta.clip(lower=0)
-    loss = -delta.clip(upper=0)
-
-    avg_gain = gain.rolling(14).mean()
-    avg_loss = loss.rolling(14).mean()
-    rs = avg_gain / avg_loss
-    df["rsi"] = 100 - (100 / (1 + rs))
-
-    return df.iloc[-1]
-
-# ===================== SUPPORT / RESIST =====================
-
-def supports_resistances(df):
-    supports = sorted(df["close"].nsmallest(3))
-    resists = sorted(df["close"].nlargest(3))
-    return supports, resists
-
-# ===================== ANALYSIS =====================
-
+# ===================== ANALIZ MOTORU =====================
 def build_analysis(symbol):
-    price24 = get_24h(symbol)
+    p24 = get_24h(symbol)
     df = get_klines(symbol)
-    if not price24 or df is None:
-        return "❌ Veri alınamadı veya coin bulunamadı"
+    
+    if p24 is None or df is None:
+        return f"❌ {symbol} için Binance verisi alınamadı. (Sembolü doğru girdiğinizden emin olun: BTC, ETH vb.)"
 
-    last = indicators(df)
-    supports, resists = supports_resistances(df)
-
-    trend = "YÜKSELİŞ 📈" if last["ema50"] > last["ema200"] else "DÜŞÜŞ (Death Cross ❌)"
-    rsi_status = "Düşük" if last["rsi"] < 40 else "Nötr" if last["rsi"] < 60 else "Yüksek"
-    risk = f"{rsi_status} ✅" if rsi_status=="Nötr" else f"{rsi_status} ⚠️"
-
-    volatility = df["close"].pct_change().rolling(14).std().iloc[-1] * 100
-    vol_text = "DÜŞÜK" if volatility < 2 else "ORTA" if volatility < 4 else "YÜKSEK"
-
-    vol = price24['volume']
-    if vol >= 1e9:
-        vol_text2 = f"${vol/1e9:.2f}B (Ort. Üstü ✅)"
-    elif vol >= 1e6:
-        vol_text2 = f"${vol/1e6:.2f}M"
-    else:
-        vol_text2 = f"${vol:.0f}"
-
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-    spot_strategy = f"""
-📥 KADEMELİ ALIM:
-1️⃣ %30: ${supports[0]:,.2f} (S1)
-2️⃣ %40: ${supports[1]:,.2f} (S2)
-3️⃣ %30: ${supports[2]:,.2f} (S3)
-🎯 HEDEFLER:
-TP1: ${resists[0]:,.2f}
-TP2: ${resists[2]:,.2f}
-🛑 STOP: ${supports[2]-1000:.2f} (yaklaşık)
-"""
-
-    futures_strategy = f"""
-📉 SHORT POZİSYON (Öncelikli):
-Giriş: ${last['ema50']:.2f} civarı
-Kaldıraç: 5x
-TP1: ${supports[0]:,.2f}
-TP2: ${supports[2]:,.2f}
-Stop: ${resists[0]:,.2f}
-
-📈 LONG POZİSYON (Alternatif):
-Giriş: ${supports[1]:,.2f} - ${supports[0]:,.2f}
-Kaldıraç: 3x
-TP1: ${last['close']:.2f}
-TP2: ${resists[0]:,.2f}
-Stop: ${supports[2]-500:.2f}
-"""
+    # Basit Göstergeler
+    current_price = p24['price']
+    ema50 = df["close"].ewm(span=50).mean().iloc[-1]
+    trend = "YÜKSELİŞ 📈" if current_price > ema50 else "DÜŞÜŞ 📉"
 
     return f"""
-════════════════════════════
-💎 {symbol.replace('USDT','')}/USDT ANALİZ
-
-💰 Anlık Fiyat: ${price24['price']:,.2f}
-🔴 24s Değişim: {price24['change']:.2f}%
-🟢 Risk: {risk}
-
-📊 DESTEK & DİRENÇ
-🔴 DİRENÇLER:
-R3: ${resists[2]:,.2f} (+{(resists[2]-price24['price'])*100/price24['price']:.1f}%)
-R2: ${resists[1]:,.2f} (+{(resists[1]-price24['price'])*100/price24['price']:.1f}%)
-R1: ${resists[0]:,.2f} (+{(resists[0]-price24['price'])*100/price24['price']:.1f}%)
-
-● ŞU AN: ${price24['price']:,.2f} ●
-
-🟢 DESTEKLER:
-S1: ${supports[0]:,.2f} ({(supports[0]-price24['price'])*100/price24['price']:.1f}%)
-S2: ${supports[1]:,.2f} ({(supports[1]-price24['price'])*100/price24['price']:.1f}%)
-S3: ${supports[2]:,.2f} ({(supports[2]-price24['price'])*100/price24['price']:.1f}%)
-
-📈 TEKNİK ÖZET
-📉 Trend: {trend}
-📊 RSI: {last['rsi']:.2f} ({rsi_status})
-📉 EMA50: {last['ema50']:.2f}
-📉 EMA200: {last['ema200']:.2f}
-📊 Volatilite: {vol_text} (%{volatility:.2f})
-📦 Hacim: {vol_text2}
-
-💰 SPOT STRATEJİ
-{spot_strategy}
-
-📊 VADELİ (FUTURES) STRATEJİ
-{futures_strategy}
-
-🕐 {now}
-⚠️ Yatırım tavsiyesi değildir
-════════════════════════════
+📊 {symbol} ANALİZ RAPORU
+════════════════════
+💰 Fiyat: ${current_price:,.2f}
+📈 24s Değişim: %{p24['change']:.2f}
+📉 Trend (EMA50): {trend}
+📦 Hacim: ${p24['volume']/1e6:.2f}M
+════════════════════
+⚠️ Yatırım tavsiyesi değildir.
 """
 
-# ===================== TELEGRAM =====================
+# ===================== TELEGRAM HANDLERS =====================
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🤖 Bot aktif! Analiz için bir coin yazın (Örn: BTC)")
 
-async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "🤖 Merhaba! Kripto analiz botuna hoş geldin.\n"
-        "Bir coin adı girin (örn: BTC) veya /help yazın."
-    )
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.strip().upper()
+    symbol = text + "USDT"
+    await update.message.reply_text(f"🔍 {symbol} inceleniyor...")
+    
+    result = build_analysis(symbol)
+    await update.message.reply_text(result)
 
-async def coin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        coin = update.message.text.replace("/", "").upper()
-        symbol = coin + "USDT"
-        analysis = build_analysis(symbol)
-        await update.message.reply_text(analysis)
-    except Exception as e:
-        await update.message.reply_text(f"❌ Hata oluştu: {e}")
-
-# ===================== RUN TELEGRAM BOT =====================
-
-def run_bot():
-    app = ApplicationBuilder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start", start_handler))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, coin_handler))
-    print("🤖 Telegram bot çalışıyor...")
-    app.run_polling()
-
-# ===================== FLASK =====================
-
+# ===================== WEB SERVER (KEEP ALIVE) =====================
 flask_app = Flask(__name__)
+@flask_app.route('/')
+def home(): return "Bot is running!"
 
-@flask_app.route("/")
-def index():
-    return "Kripto Analiz Bot çalışıyor 🟢"
+def run_flask():
+    port = int(os.environ.get("PORT", 8080))
+    flask_app.run(host='0.0.0.0', port=port)
 
-# Cron job için tetikleme (örn. BTC analizi 10 dakikada bir)
-def cron_job():
-    import asyncio
-    import telegram
-    bot = telegram.Bot(token=TOKEN)
-    symbol = "BTCUSDT"  # Cron ile kontrol edilecek coin
-    message = build_analysis(symbol)
-    if CHAT_ID:
-        asyncio.run(bot.send_message(chat_id=CHAT_ID, text=message))
-    else:
-        print("CHAT_ID ayarlanmadı, mesaj gönderilemedi.")
-
-if __name__ == "__main__":
-    # Telegram botu ayrı thread'te çalışsın
-    threading.Thread(target=run_bot).start()
-    # Flask app
-    flask_app.run(host="0.0.0.0", port=8080)
+# ===================== ANA CALISTIRICI =====================
+if __name__ == '__main__':
+    # Flask'ı ayrı bir thread'de başlatıyoruz (Botu etkilemez)
+    threading.Thread(target=run_flask, daemon=True).start()
+    
+    # Telegram botu ana thread'de başlatıyoruz (Hata almamak için)
+    print("🚀 Bot başlatılıyor...")
+    app = ApplicationBuilder().token(TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
+    app.run_polling()
