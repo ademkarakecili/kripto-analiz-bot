@@ -3,26 +3,13 @@ import pandas as pd
 from datetime import datetime
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters, CommandHandler
-import os
 from flask import Flask
-from threading import Thread
 
-app_web = Flask('')
+import threading
+import os
 
-@app_web.route('/')
-def home():
-    return "Bot is alive!"
-
-def run():
-    # Render'ın dinamik portunu alır, yoksa 8080 kullanır
-    port = int(os.environ.get("PORT", 8080))
-    app_web.run(host='0.0.0.0', port=port)
-
-def keep_alive():
-    t = Thread(target=run)
-    t.start()
-
-TOKEN = "8387569713:AAF02_URGPDalPW7KWZVhT0EVqFXArs95-A"
+TOKEN = os.getenv("TELEGRAM_TOKEN", "8387569713:AAHfe4v0TdmDm2vbQCz0TvGvyIWgyl7OjPw")
+CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "1869105089")  # Cron job tetiklemesi için kendi Telegram ID'n
 
 # ===================== BINANCE =====================
 
@@ -91,16 +78,13 @@ def build_analysis(symbol):
     last = indicators(df)
     supports, resists = supports_resistances(df)
 
-    # Trend ve risk
     trend = "YÜKSELİŞ 📈" if last["ema50"] > last["ema200"] else "DÜŞÜŞ (Death Cross ❌)"
     rsi_status = "Düşük" if last["rsi"] < 40 else "Nötr" if last["rsi"] < 60 else "Yüksek"
     risk = f"{rsi_status} ✅" if rsi_status=="Nötr" else f"{rsi_status} ⚠️"
 
-    # Volatilite
     volatility = df["close"].pct_change().rolling(14).std().iloc[-1] * 100
     vol_text = "DÜŞÜK" if volatility < 2 else "ORTA" if volatility < 4 else "YÜKSEK"
 
-    # Hacim
     vol = price24['volume']
     if vol >= 1e9:
         vol_text2 = f"${vol/1e9:.2f}B (Ort. Üstü ✅)"
@@ -111,7 +95,6 @@ def build_analysis(symbol):
 
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    # Spot strateji
     spot_strategy = f"""
 📥 KADEMELİ ALIM:
 1️⃣ %30: ${supports[0]:,.2f} (S1)
@@ -123,7 +106,6 @@ TP2: ${resists[2]:,.2f}
 🛑 STOP: ${supports[2]-1000:.2f} (yaklaşık)
 """
 
-    # Futures strateji
     futures_strategy = f"""
 📉 SHORT POZİSYON (Öncelikli):
 Giriş: ${last['ema50']:.2f} civarı
@@ -148,7 +130,6 @@ Stop: ${supports[2]-500:.2f}
 🔴 24s Değişim: {price24['change']:.2f}%
 🟢 Risk: {risk}
 
-────────────────────────────
 📊 DESTEK & DİRENÇ
 🔴 DİRENÇLER:
 R3: ${resists[2]:,.2f} (+{(resists[2]-price24['price'])*100/price24['price']:.1f}%)
@@ -162,7 +143,6 @@ S1: ${supports[0]:,.2f} ({(supports[0]-price24['price'])*100/price24['price']:.1
 S2: ${supports[1]:,.2f} ({(supports[1]-price24['price'])*100/price24['price']:.1f}%)
 S3: ${supports[2]:,.2f} ({(supports[2]-price24['price'])*100/price24['price']:.1f}%)
 
-────────────────────────────
 📈 TEKNİK ÖZET
 📉 Trend: {trend}
 📊 RSI: {last['rsi']:.2f} ({rsi_status})
@@ -171,22 +151,12 @@ S3: ${supports[2]:,.2f} ({(supports[2]-price24['price'])*100/price24['price']:.1
 📊 Volatilite: {vol_text} (%{volatility:.2f})
 📦 Hacim: {vol_text2}
 
-────────────────────────────
-⚠️ KRİTİK GÖZLEMLER:
-• Fiyat günlük dibe yakın
-• EMA200 altında işlem
-• Order book satıcı ağır (basit gözlem)
-• Trend uyumsuzlukları var
-
-────────────────────────────
 💰 SPOT STRATEJİ
 {spot_strategy}
 
 📊 VADELİ (FUTURES) STRATEJİ
 {futures_strategy}
 
-────────────────────────────
-⚠️ FOMO yapma, sabırlı ol!
 🕐 {now}
 ⚠️ Yatırım tavsiyesi değildir
 ════════════════════════════
@@ -194,14 +164,12 @@ S3: ${supports[2]:,.2f} ({(supports[2]-price24['price'])*100/price24['price']:.1
 
 # ===================== TELEGRAM =====================
 
-# /start komutu
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🤖 Merhaba! Kripto analiz botuna hoş geldin.\n"
         "Bir coin adı girin (örn: BTC) veya /help yazın."
     )
 
-# Coin analizi handler
 async def coin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         coin = update.message.text.replace("/", "").upper()
@@ -211,27 +179,37 @@ async def coin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"❌ Hata oluştu: {e}")
 
-# ===================== RUN =====================
+# ===================== RUN TELEGRAM BOT =====================
 
-app = ApplicationBuilder().token(TOKEN).build()
+def run_bot():
+    app = ApplicationBuilder().token(TOKEN).build()
+    app.add_handler(CommandHandler("start", start_handler))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, coin_handler))
+    print("🤖 Telegram bot çalışıyor...")
+    app.run_polling()
 
-# Handlers
-app.add_handler(CommandHandler("start", start_handler))
-app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, coin_handler))
+# ===================== FLASK =====================
 
-print("🤖 Kriptocu Analiz Bot çalışıyor...")
-# ===================== BAŞLATMA =====================
+flask_app = Flask(__name__)
 
-if __name__ == '__main__':
-    try:
-        # Render'ın botu uyutmaması için web sunucusunu başlat
-        keep_alive() 
-        
-        # Botu çalıştır
-        print("🤖 Kriptocu Analiz Bot çalışıyor...")
-        app.run_polling()
-    except Exception as e:
-        print(f"❌ Başlatma hatası: {e}")
+@flask_app.route("/")
+def index():
+    return "Kripto Analiz Bot çalışıyor 🟢"
 
+# Cron job için tetikleme (örn. BTC analizi 10 dakikada bir)
+def cron_job():
+    import asyncio
+    import telegram
+    bot = telegram.Bot(token=TOKEN)
+    symbol = "BTCUSDT"  # Cron ile kontrol edilecek coin
+    message = build_analysis(symbol)
+    if CHAT_ID:
+        asyncio.run(bot.send_message(chat_id=CHAT_ID, text=message))
+    else:
+        print("CHAT_ID ayarlanmadı, mesaj gönderilemedi.")
 
-
+if __name__ == "__main__":
+    # Telegram botu ayrı thread'te çalışsın
+    threading.Thread(target=run_bot).start()
+    # Flask app
+    flask_app.run(host="0.0.0.0", port=8080)
