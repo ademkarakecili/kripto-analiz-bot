@@ -9,7 +9,7 @@ from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filte
 import threading
 
 # Ayarlar
-TOKEN = "8387569713:AAHfe4v0TdmDm2vbQCz0TvGvyIWgyl7OjPw"
+TOKEN = "8387569713:AAF02_URGPDalPW7KWZVhT0EVqFXArs95-A"
 
 # ===================== BINANCE VERI CEKME =====================
 def get_24h(symbol):
@@ -91,3 +91,4 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
     app.run_polling()
+
